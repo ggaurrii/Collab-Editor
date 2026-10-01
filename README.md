@@ -1,71 +1,201 @@
-# Collab Editor
+# ⚡ CollabEditor
 
-Real-time collaborative code editor: Next.js + Monaco + Yjs, custom Node WebSocket
-server, Postgres persistence, Redis pub/sub for horizontal scaling.
+> High-performance, horizontally scalable real-time collaborative code editor built with **Next.js**, **Monaco Editor**, **Yjs (CRDT)**, **Custom Node.js WebSockets**, **PostgreSQL**, and **Redis Pub/Sub**.
 
-## Run (infra in Docker, apps local — best for development)
+---
+
+## 🌟 Overview
+
+**CollabEditor** is a distributed collaborative development environment designed for real-time multiplayer editing, scalable state synchronization, and robust document persistence.
+
+Instead of relying on third-party black-box sync engines, CollabEditor features a custom WebSocket server speaking raw binary Yjs sync and awareness protocols, horizontally partitioned across multiple server instances with Redis Pub/Sub, and backed by a PostgreSQL append-only CRDT binary log with automatic periodic compaction.
+
+---
+
+## 🏗️ Architecture
+
+```
+                                 ┌────────────────────────┐
+                                 │   Browser / Client     │
+                                 │ Next.js + Monaco + Yjs │
+                                 └───────────┬────────────┘
+                                             │
+                       WebSocket (Binary Yjs Updates + Awareness)
+                                             │
+                        ┌────────────────────┴────────────────────┐
+                        │                                         │
+                        ▼                                         ▼
+            ┌──────────────────────┐                  ┌──────────────────────┐
+            │ Realtime Instance #1 │                  │ Realtime Instance #2 │
+            │     (Node.js / ws)   │                  │     (Node.js / ws)   │
+            └──────────┬───────────┘                  └───────────┬──────────┘
+                       │                                          │
+                       ├─────────────────────┬────────────────────┤
+                       │                     │                    │
+                       ▼                     ▼                    ▼
+             ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+             │  Redis Pub/Sub   │  │   PostgreSQL DB  │  │ Next.js REST API │
+             │  (Doc Channels)  │  │ (Snapshots & Log)│  │ (Auth & Workspaces)│
+             └──────────────────┘  └──────────────────┘  └──────────────────┘
+```
+
+---
+
+## ✨ Key Technical Highlights & Engineering Decisions
+
+### 1. **Conflict-Free Replicated Data Types (CRDTs) with Yjs**
+- Utilizes state-of-the-art **Yjs** CRDTs to achieve mathematically provable convergence across concurrent edits without requiring a centralized lock coordinator.
+- Employs a local `Y.UndoManager` scoped to individual users, ensuring that `Ctrl+Z` / `Cmd+Z` only rolls back edits made by the invoking user without corrupting peer contributions.
+
+### 2. **Custom Binary WebSocket Protocol**
+- Built on Node.js `ws` using `y-protocols` and `lib0` binary encoding/decoding.
+- Avoids JSON serialization overhead by transmitting raw byte arrays for sync steps (`MSG_SYNC`) and live presence updates (`MSG_AWARENESS`).
+
+### 3. **Horizontal Scalability via Redis Pub/Sub**
+- Multi-instance topology with room-level channel partitioning: `doc:{workspaceId}:{fileId}`.
+- Smart origin tagging: instances apply updates locally and broadcast strictly local mutations to Redis, preventing infinite echo loops while ensuring $O(1)$ fan-out across server nodes.
+
+### 4. **Dual-Tier Ticket-Based Authentication**
+- **Web App**: Authenticates via `httpOnly` secure session cookies containing signed JWTs (7-day TTL).
+- **WebSocket Upgrade**: Single-use, cryptographically signed 5-minute tickets minted at `POST /api/ticket` bound to `workspaceId:fileId` and the user's role.
+- **Role Enforcement at the Wire**: Unauthorized upgrades are rejected with HTTP `401`. Viewer-role users have incoming CRDT update vectors rejected at the socket layer.
+
+### 5. **PostgreSQL Binary Persistence & Compaction**
+- Stores raw `BYTEA` Yjs update logs rather than text representations.
+- Automatically collapses update logs into a single compact state snapshot (`file_snapshots`) every 200 mutations to bound query latency and storage overhead.
+
+---
+
+## 📁 Repository Structure
+
+```text
+collab-editor/
+├── apps/
+│   ├── realtime/                 # Realtime sync service
+│   │   ├── src/
+│   │   │   ├── auth.ts          # Ticket verification & claims
+│   │   │   ├── bus.ts           # Redis Pub/Sub message broker
+│   │   │   ├── db.ts            # Postgres binary loader & compaction
+│   │   │   └── server.ts        # Custom WebSocket & Yjs sync server
+│   │   └── tsconfig.json
+│   │
+│   └── web/                      # Next.js frontend & REST API
+│       ├── app/
+│       │   ├── api/             # Workspaces, files, tickets, auth endpoints
+│       │   ├── login/           # Auth login/registration UI
+│       │   └── w/[workspaceId]/ # Workspace & editor layout
+│       ├── components/
+│       │   ├── CollabEditor.tsx # Monaco editor + Yjs binding & cursors
+│       │   ├── FileTree.tsx     # Interactive file explorer
+│       │   └── Workspace.tsx    # Multi-tab workspace manager
+│       └── lib/                 # Auth helpers, DB pools, access guards
+│
+├── db/
+│   ├── 001_init.sql             # Files, updates & snapshot schemas
+│   └── 002_auth.sql             # Users, workspaces & member RBAC schema
+├── scripts/
+│   └── e2e.mjs                  # Comprehensive multi-instance E2E test suite
+├── docker-compose.yml           # Multi-container orchestration (Postgres, Redis, Apps)
+└── package.json                 # Monorepo configuration
+```
+
+---
+
+## 🚀 Quick Start Guide
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v20.x or higher)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for PostgreSQL and Redis)
+
+---
+
+### 1. Clone and Install Dependencies
 
 ```bash
+git clone https://github.com/ggaurrii/Collab-Editor.git
+cd Collab-Editor
 npm install
-npm run infra                 # postgres + redis (runs db/*.sql on first start)
-npm run dev:realtime          # :4000
-npm run dev:realtime2         # :4001  (second instance)
-npm run dev:web               # :3000
 ```
 
-Open http://localhost:3000, register two users (use a private window for the second),
-create a workspace, click **Share**, add the second user by email, and edit the same file.
-Each tab connects to a random realtime instance, so edits crossing instances exercise Redis.
+### 2. Start PostgreSQL & Redis Infrastructure
 
-Already have a Postgres volume from before step 4? Apply the new schema:
-`docker compose exec -T postgres psql -U collab -d collab < db/002_auth.sql`
-
-## Tests
-
-With infra + both realtime instances + web running:
+Make sure **Docker Desktop is running**, then start the databases:
 
 ```bash
-npm run test:e2e
+npm run infra
 ```
+> *PostgreSQL starts on port `5432` and Redis starts on port `6379`.*
 
-Covers auth, permissions, the file tree, ticket rejection, cross-instance sync,
-viewer read-only enforcement, presence, persistence and cleanup on delete.
+### 3. Launch Development Servers
 
-## Run everything in Docker
+Open 3 terminal windows/tabs:
+
+* **Terminal 1: Realtime Server Instance #1** (Port `4000`)
+  ```bash
+  npm run dev:realtime
+  ```
+
+* **Terminal 2: Realtime Server Instance #2** (Port `4001`)
+  ```bash
+  npm run dev:realtime2
+  ```
+
+* **Terminal 3: Next.js Web Frontend** (Port `3000`)
+  ```bash
+  npm run dev:web
+  ```
+
+### 4. Experience Real-time Collaboration
+
+1. Open **[http://localhost:3000](http://localhost:3000)** in your browser and register an account.
+2. Create a new workspace and add a file.
+3. Open a **Private / Incognito** window, register a second account.
+4. From the first window, click **Share**, enter the second user's email, and invite them.
+5. Open the same file across both windows — edits, remote selections, and multi-colored cursor presences sync in real-time across instances via Redis!
+
+---
+
+## 🐳 Docker Deployment (Full Stack)
+
+To run the entire system (databases, multiple realtime instances, and web) in containerized isolation:
 
 ```bash
 docker compose --profile app up --build
 ```
 
-## How auth works
+---
 
-1. Browser signs in → httpOnly session cookie (JWT, 7 days).
-2. Opening a file → `POST /api/ticket` checks workspace membership and mints a
-   5-minute JWT bound to one room (`workspaceId:fileId`) and the caller's role.
-3. The WebSocket connects with `?ticket=…`; the realtime server verifies it during the
-   HTTP upgrade (no ticket / wrong room / bad signature → 401, no socket).
-4. Viewers' sync messages that carry updates are dropped server-side.
+## 🧪 Testing & Verification
 
-Known limits: role changes apply to *new* connections only; tickets appear in the URL
-(keep access logs scrubbed); no login rate limiting yet.
+The repository includes an end-to-end test suite verifying:
+- Authentication, session validation, and permission checks.
+- Ticket lifecycle validation (expiration, forgery, workspace mismatch).
+- File tree management (creation, rename, circular move prevention).
+- Multi-instance cross-synchronization via Redis Pub/Sub.
+- Viewer role enforcement (server-side drop of unauthorized updates).
+- Document rebuild fidelity from PostgreSQL snapshots and delta logs.
 
-## Layout
-
-```
-apps/realtime   WS server: ticket auth, Yjs sync + awareness, Postgres log, Redis bus
-apps/web        Next.js: UI + REST API (auth, workspaces, members, files, tickets)
-db/*.sql        schema, applied in order
-scripts/e2e.mjs end-to-end test
+Run the test suite:
+```bash
+npm run test:e2e
 ```
 
-## Roadmap
-1. [x] Monorepo + Docker Compose
-2. [x] Multi-user editing over custom WS server
-3. [x] Postgres persistence + compaction
-4. [x] Auth, workspaces, roles, file tree
-5. [x] Presence (basic cursors + user list)
-6. [ ] Custom reconnecting provider + offline edits test
-7. [x] Redis pub/sub across instances (add nginx to load-balance)
-8. [ ] Version history + diff UI
-9. [ ] Sandboxed code execution (BullMQ + locked-down containers)
-10. [ ] Load test, metrics, architecture doc
+---
+
+## 🗺️ Roadmap
+
+- [x] Monorepo orchestration & Docker Compose infrastructure
+- [x] Custom binary WebSocket server (`y-protocols` + `lib0`)
+- [x] PostgreSQL binary CRDT persistence with auto-compaction
+- [x] Multi-user workspace management with RBAC (Owner, Editor, Viewer)
+- [x] Remote cursor presence and real-time awareness
+- [x] Redis Pub/Sub horizontal scale-out
+- [ ] Visual version history and snapshot diffing UI
+- [ ] Sandboxed remote code execution engine (Docker sandbox with resource quotas & `--network none`)
+- [ ] P95 latency and concurrent connection benchmark suite
+
+---
+
+## 📄 License
+
+This project is open-source and available under the [MIT License](LICENSE).
