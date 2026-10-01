@@ -182,17 +182,7 @@ npm run test:e2e
 
 ---
 
-## 🗺️ Roadmap
 
-- [x] Monorepo orchestration & Docker Compose infrastructure
-- [x] Custom binary WebSocket server (`y-protocols` + `lib0`)
-- [x] PostgreSQL binary CRDT persistence with auto-compaction
-- [x] Multi-user workspace management with RBAC (Owner, Editor, Viewer)
-- [x] Remote cursor presence and real-time awareness
-- [x] Redis Pub/Sub horizontal scale-out
-- [ ] Visual version history and snapshot diffing UI
-- [ ] Sandboxed remote code execution engine (Docker sandbox with resource quotas & `--network none`)
-- [ ] P95 latency and concurrent connection benchmark suite
 
 ---
 
