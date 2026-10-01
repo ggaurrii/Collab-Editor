@@ -1,0 +1,27 @@
+{
+  "name": "realtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1",
+    "jose": "^5.6.3",
+    "lib0": "^0.2.99",
+    "pg": "^8.12.0",
+    "ws": "^8.18.0",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.18"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
